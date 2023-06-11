@@ -1,0 +1,103 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[2]:
+
+
+get_ipython().run_line_magic('pip', 'install -Uq upgini catboost')
+
+
+# In[3]:
+
+
+from os.path import exists
+import pandas as pd
+
+df_path = "train.csv.zip" if exists("train.csv.zip") else "https://raw.githubusercontent.com/upgini/upgini/main/notebooks/train.csv.zip"
+df = pd.read_csv(df_path)
+df = df.sample(n = 19_000, random_state = 0)
+df["store"] = df["store"].astype(str)
+df["item"] = df["item"].astype(str)
+
+df["date"] = pd.to_datetime(df["date"])
+
+df.sort_values("date", inplace = True)
+df.reset_index(inplace=True, drop=True)
+df.head()
+
+
+# In[4]:
+
+
+train = df[df["date"] < "2017-01-01"]
+test = df[df["date"] >= "2017-01-01"]
+
+
+# In[5]:
+
+
+train_features = train.drop(columns = ["sales"])
+train_target = train["sales"]
+test_features = test.drop(columns = ["sales"])
+test_target = test["sales"]
+
+
+# In[6]:
+
+
+from upgini import FeaturesEnricher, SearchKey
+from upgini.metadata import CVType
+
+enricher = FeaturesEnricher(
+    search_keys = {
+        "date": SearchKey.DATE, 
+    },
+    cv = CVType.time_series
+)
+enricher.fit(train_features, train_target, eval_set = [(test_features, test_target)])
+
+
+# In[7]:
+
+
+from catboost import CatBoostRegressor
+from catboost.utils import eval_metric
+
+model = CatBoostRegressor(verbose=False, allow_writing_files=False, random_state=0)
+
+enricher.calculate_metrics(train_features,
+                           train_target,
+                           eval_set = [(test_features, test_target)],
+                           estimator = model,
+                           scoring = "mean_absolute_percentage_error")
+
+
+# In[8]:
+
+
+enriched_train_features = enricher.transform(train_features, keep_input=True)
+enriched_test_features = enricher.transform(test_features, keep_input=True)
+enriched_train_features.head()
+
+
+# In[9]:
+
+
+model.fit(train_features, train_target)
+preds = model.predict(test_features)
+eval_metric(test_target.values, preds, "SMAPE")
+
+
+# In[10]:
+
+
+model.fit(enriched_train_features, train_target)
+enriched_preds = model.predict(enriched_test_features)
+eval_metric(test_target.values, enriched_preds, "SMAPE")
+
+
+# In[ ]:
+
+
+
+
